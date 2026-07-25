@@ -12,22 +12,51 @@ export DESKTOP=/usr/share/applications/Waydroid.desktop
 export DEPLOY_PYTHON=1
 
 # -------------------------------------------------------------------
-# Helper: fetch the latest image zip URL from SourceForge via HTML scraping
+# Helper: fetch the latest image zip URL from SourceForge
+# Tries the REST API (with jq) first; if that fails, falls back to HTML scraping.
 # Arguments:
 #   $1 = base path (e.g., "images/system/lineage/waydroid_x86_64")
-#   $2 = variant to match in the zip filename (e.g., "VANILLA" or "MAINLINE")
+#   $2 = variant to match in the zip filename (e.g., "VANILLA", "GAPPS", "MAINLINE")
 # Returns: full download URL of the zip file
 # -------------------------------------------------------------------
 fetch_latest_image() {
     local base_path="$1"
     local variant="${2:-VANILLA}"
     local project="waydroid"
+    local api_url="https://sourceforge.net/rest/p/${project}/files/${base_path}/"
     local list_url="https://sourceforge.net/projects/${project}/files/${base_path}/"
 
-    html=$(wget -qO- "$list_url" 2>/dev/null || echo "")
+    # ---- Try API with jq first ----
+    if command -v jq >/dev/null 2>&1; then
+        # Get the latest subdirectory (sorted by date descending)
+        latest_dir=$(curl -s -H "Accept: application/json" "$api_url" | jq -r '.subdirs[] | .name' | sort -r | head -n1)
+        if [ -n "$latest_dir" ]; then
+            # Now get the zip file in that subdir matching the variant
+            file_url=$(curl -s -H "Accept: application/json" "${api_url}${latest_dir}/" | jq -r --arg variant "$variant" '.files[] | select(.name | test(".*-'"$variant"'-.*\\.zip$"; "i")) | .download_url' | head -n1)
+            # If no match, fallback to any zip
+            if [ -z "$file_url" ]; then
+                file_url=$(curl -s -H "Accept: application/json" "${api_url}${latest_dir}/" | jq -r '.files[] | select(.name | endswith(".zip")) | .download_url' | head -n1)
+            fi
+            if [ -n "$file_url" ]; then
+                echo "$file_url"
+                return 0
+            fi
+        fi
+    fi
+
+    # ---- Fallback: HTML scraping ----
+    echo "WARNING: API method failed, falling back to HTML scraping" >&2
+
+    # Fetch the directory listing with proper flags
+    html=$(wget -qO- -L --user-agent="Mozilla/5.0" "$list_url" 2>/dev/null || echo "")
+
+    if [ -z "$html" ]; then
+        echo "ERROR: Could not retrieve directory listing from $list_url" >&2
+        return 1
+    fi
 
     # Extract all subdirectory links (they point to dated folders)
-    # Use # as sed delimiter to avoid escaping slashes in base_path
+    # Pattern: href="/projects/waydroid/files/images/.../lineage-18.1-YYYYMMDD-.../"
     dirs=$(echo "$html" | grep -o 'href="/projects/waydroid/files/'"${base_path}"'/[^"]*/"' | sed 's#.*/files/'"${base_path}"'/##;s#/"$##')
 
     # Find the latest dated directory (sort by the YYYYMMDD part)
@@ -45,7 +74,7 @@ fetch_latest_image() {
 
     # Now fetch the file list inside that directory
     file_list_url="https://sourceforge.net/projects/${project}/files/${base_path}/${latest_dir}/"
-    file_html=$(wget -qO- "$file_list_url" 2>/dev/null || echo "")
+    file_html=$(wget -qO- -L --user-agent="Mozilla/5.0" "$file_list_url" 2>/dev/null || echo "")
 
     # Look for a zip file matching the variant (case-insensitive)
     zip_url=$(echo "$file_html" | grep -o 'href="[^"]*\.zip"' | grep -i "$variant" | head -n1 | sed 's#^href="##;s#"$##')
