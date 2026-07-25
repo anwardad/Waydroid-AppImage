@@ -24,15 +24,13 @@ fetch_latest_image() {
     local project="waydroid"
     local list_url="https://sourceforge.net/projects/${project}/files/${base_path}/"
 
-    # Get the directory listing HTML
     html=$(wget -qO- "$list_url" 2>/dev/null || echo "")
 
     # Extract all subdirectory links (they point to dated folders)
-    # Pattern: href="/projects/waydroid/files/images/.../lineage-18.1-YYYYMMDD-.../"
-    dirs=$(echo "$html" | grep -o 'href="/projects/waydroid/files/'"${base_path}"'/[^"]*/"' | sed 's/.*\/files\/'"${base_path}"'\///;s/\/"//')
+    # Use # as sed delimiter to avoid escaping slashes in base_path
+    dirs=$(echo "$html" | grep -o 'href="/projects/waydroid/files/'"${base_path}"'/[^"]*/"' | sed 's#.*/files/'"${base_path}"'/##;s#/"$##')
 
     # Find the latest dated directory (sort by the YYYYMMDD part)
-    # Assumes format: lineage-18.1-YYYYMMDD-...
     latest_dir=$(echo "$dirs" | grep -E 'lineage-18\.1-[0-9]{8}-' | sort -t- -k3 -n | tail -n1)
 
     # Fallback: if no pattern match, take the first directory
@@ -50,11 +48,11 @@ fetch_latest_image() {
     file_html=$(wget -qO- "$file_list_url" 2>/dev/null || echo "")
 
     # Look for a zip file matching the variant (case-insensitive)
-    zip_url=$(echo "$file_html" | grep -o 'href="[^"]*\.zip"' | grep -i "$variant" | head -n1 | sed 's/^href="//;s/"$//')
+    zip_url=$(echo "$file_html" | grep -o 'href="[^"]*\.zip"' | grep -i "$variant" | head -n1 | sed 's#^href="##;s#"$##')
 
     # Fallback: any zip file
     if [ -z "$zip_url" ]; then
-        zip_url=$(echo "$file_html" | grep -o 'href="[^"]*\.zip"' | head -n1 | sed 's/^href="//;s/"$//')
+        zip_url=$(echo "$file_html" | grep -o 'href="[^"]*\.zip"' | head -n1 | sed 's#^href="##;s#"$##')
     fi
 
     if [ -z "$zip_url" ]; then
