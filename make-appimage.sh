@@ -12,59 +12,69 @@ export DESKTOP=/usr/share/applications/Waydroid.desktop
 export DEPLOY_PYTHON=1
 
 # -------------------------------------------------------------------
-# Helper function to fetch the latest image URL from SourceForge
-# Arguments: $1 = base path (e.g., "system/lineage/waydroid_x86_64")
-#            $2 = variant (VANILLA or GAPPS) - optional, default VANILLA
-# Returns: URL to the .zip file
+# Helper: fetch the latest image zip URL from SourceForge via HTML scraping
+# Arguments:
+#   $1 = base path (e.g., "images/system/lineage/waydroid_x86_64")
+#   $2 = variant to match in the zip filename (e.g., "VANILLA" or "MAINLINE")
+# Returns: full download URL of the zip file
 # -------------------------------------------------------------------
 fetch_latest_image() {
     local base_path="$1"
     local variant="${2:-VANILLA}"
     local project="waydroid"
-    local api_url="https://sourceforge.net/rest/p/${project}/files/${base_path}/"
+    local list_url="https://sourceforge.net/projects/${project}/files/${base_path}/"
 
-    # Use jq to parse the JSON response; fallback to a crude grep if jq not found
-    if command -v jq >/dev/null 2>&1; then
-        # Get the list of subdirectories (each is a dated release)
-        # Pick the one with the largest date (lexicographically)
-        latest_dir=$(curl -s "$api_url" | jq -r '.subdirs[] | .name' | sort -r | head -n1)
-        if [ -z "$latest_dir" ]; then
-            echo "ERROR: No subdirectories found for $base_path" >&2
-            return 1
-        fi
-        # Now get files in that subdir, look for a zip matching the variant
-        file_url=$(curl -s "${api_url}${latest_dir}/" | jq -r --arg variant "$variant" '.files[] | select(.name | test(".*-'"$variant"'-.*\\.zip$")) | .download_url')
-        if [ -z "$file_url" ]; then
-            # If no variant-specific file, fallback to any zip (maybe there's only one)
-            file_url=$(curl -s "${api_url}${latest_dir}/" | jq -r '.files[] | select(.name | endswith(".zip")) | .download_url' | head -n1)
-        fi
-        echo "$file_url"
-    else
-        # Fallback: use wget to get the directory listing HTML and parse
-        # (This is less reliable but works as a fallback)
-        echo "WARNING: jq not installed, using fallback HTML parsing" >&2
-        local list_url="https://sourceforge.net/projects/${project}/files/${base_path}/"
-        # Get the latest directory by sorting the table rows by date (crude)
-        latest_dir=$(wget -qO- "$list_url" | grep -o 'href="[^"]*"' | grep -E '/files/'"${base_path}"'/[0-9]{8}-' | head -n1 | sed 's/.*\/files\///;s/".*//')
-        if [ -z "$latest_dir" ]; then
-            # fallback: pick the first directory listed
-            latest_dir=$(wget -qO- "$list_url" | grep -o 'href="[^"]*"' | grep -E '/files/'"${base_path}"'/' | head -n1 | sed 's/.*\/files\///;s/".*//')
-        fi
-        if [ -z "$latest_dir" ]; then
-            echo "ERROR: Could not determine latest directory" >&2
-            return 1
-        fi
-        # Now fetch the zip file from that directory
-        file_url=$(wget -qO- "${list_url}${latest_dir}/" | grep -o 'href="[^"]*"' | grep -E '\.zip' | head -n1 | sed 's/.*href="//;s/".*//' | sed 's|^/|https://sourceforge.net|')
-        echo "$file_url"
+    # Get the directory listing HTML
+    html=$(wget -qO- "$list_url" 2>/dev/null || echo "")
+
+    # Extract all subdirectory links (they point to dated folders)
+    # Pattern: href="/projects/waydroid/files/images/.../lineage-18.1-YYYYMMDD-.../"
+    dirs=$(echo "$html" | grep -o 'href="/projects/waydroid/files/'"${base_path}"'/[^"]*/"' | sed 's/.*\/files\/'"${base_path}"'\///;s/\/"//')
+
+    # Find the latest dated directory (sort by the YYYYMMDD part)
+    # Assumes format: lineage-18.1-YYYYMMDD-...
+    latest_dir=$(echo "$dirs" | grep -E 'lineage-18\.1-[0-9]{8}-' | sort -t- -k3 -n | tail -n1)
+
+    # Fallback: if no pattern match, take the first directory
+    if [ -z "$latest_dir" ]; then
+        latest_dir=$(echo "$dirs" | head -n1)
     fi
+
+    if [ -z "$latest_dir" ]; then
+        echo "ERROR: No subdirectories found for $base_path" >&2
+        return 1
+    fi
+
+    # Now fetch the file list inside that directory
+    file_list_url="https://sourceforge.net/projects/${project}/files/${base_path}/${latest_dir}/"
+    file_html=$(wget -qO- "$file_list_url" 2>/dev/null || echo "")
+
+    # Look for a zip file matching the variant (case-insensitive)
+    zip_url=$(echo "$file_html" | grep -o 'href="[^"]*\.zip"' | grep -i "$variant" | head -n1 | sed 's/^href="//;s/"$//')
+
+    # Fallback: any zip file
+    if [ -z "$zip_url" ]; then
+        zip_url=$(echo "$file_html" | grep -o 'href="[^"]*\.zip"' | head -n1 | sed 's/^href="//;s/"$//')
+    fi
+
+    if [ -z "$zip_url" ]; then
+        echo "ERROR: No zip file found in $file_list_url" >&2
+        return 1
+    fi
+
+    # Convert relative URL to absolute if needed
+    if echo "$zip_url" | grep -q '^/'; then
+        zip_url="https://sourceforge.net$zip_url"
+    fi
+
+    echo "$zip_url"
 }
 
 # -------------------------------------------------------------------
-# Determine base paths and variants based on architecture and DEVEL_RELEASE
+# Determine base paths and variant based on architecture and DEVEL_RELEASE
 # -------------------------------------------------------------------
 if [ "${DEVEL_RELEASE:-0}" = "1" ]; then
-    variant="GAPPS"   # Use GApps for nightly builds (or change to your preference)
+    variant="GAPPS"          # Nightly → use GApps (or change to your liking)
 else
     variant="VANILLA"
 fi
@@ -98,7 +108,6 @@ if [ -z "$SYSTEM_URL" ]; then
 fi
 
 echo "Fetching latest vendor image (MAINLINE) for $ARCH..."
-# Vendor images usually don't have a variant, we just fetch the MAINLINE one
 VENDOR_URL=$(fetch_latest_image "$base_vendor" "MAINLINE")
 if [ -z "$VENDOR_URL" ]; then
     echo "ERROR: Failed to get vendor image URL" >&2
@@ -115,19 +124,16 @@ unzip -q system.zip -d "$IMAGE_DIR"
 unzip -q vendor.zip -d "$IMAGE_DIR"
 rm -f system.zip vendor.zip
 
-# Ensure the files are named correctly (some archives may have subdirs)
-# Move any .img files to the root of IMAGE_DIR
+# Ensure the .img files are directly in IMAGE_DIR (some archives have subfolders)
 find "$IMAGE_DIR" -type f -name "*.img" -exec mv -n {} "$IMAGE_DIR"/ \; 2>/dev/null || true
-# Remove empty subdirectories
 find "$IMAGE_DIR" -type d -empty -delete 2>/dev/null || true
 
 # -------------------------------------------------------------------
-# Deploy dependencies (unchanged)
+# Deploy dependencies
 # -------------------------------------------------------------------
 mkdir -p ./AppDir/bin
 cp -r /usr/lib/waydroid/* ./AppDir/bin
-# We'll replace the symlink with a wrapper later, so remove it
-rm -f ./AppDir/bin/waydroid
+rm -f ./AppDir/bin/waydroid   # we will replace with a wrapper
 
 quick-sharun \
     ./AppDir/bin/*            \
@@ -149,11 +155,10 @@ quick-sharun \
 find ./AppDir/share/dbus-1 ./AppDir/share/polkit-1 -type f ! -name '*waydro*' -delete
 
 # -------------------------------------------------------------------
-# Create a wrapper script for waydroid that injects -i
+# Create wrapper for waydroid that forces -i to bundled images
 # -------------------------------------------------------------------
 cat > ./AppDir/bin/waydroid << 'EOF'
 #!/bin/sh
-# Wrapper for waydroid to force usage of bundled images
 APPDIR="${APPDIR:-$(dirname "$(realpath "$0")")/..}"
 IMAGE_DIR="$APPDIR/usr/share/waydroid-extra/images"
 
@@ -173,6 +178,6 @@ echo 'unset APPIMAGE_EXTRACT_AND_RUN' >> ./AppDir/.env
 ADD_PERMA_ENV_VARS='APPIMAGE_EXTRACT_AND_RUN=1' quick-sharun --make-appimage
 
 # -------------------------------------------------------------------
-# Simple test (adjust timeout if needed)
+# Test the AppImage (simple test)
 # -------------------------------------------------------------------
 quick-sharun --simple-test ./dist/*.AppImage
