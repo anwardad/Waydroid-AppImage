@@ -12,30 +12,41 @@ export DESKTOP=/usr/share/applications/Waydroid.desktop
 export DEPLOY_PYTHON=1
 
 # -------------------------------------------------------------------
-# Copy pre-installed images from the system into the AppDir
+# Download Android images using the official Waydroid script
 # -------------------------------------------------------------------
 IMAGE_DIR="./AppDir/usr/share/waydroid-extra/images"
 mkdir -p "$IMAGE_DIR"
 
-# The images are installed by pacman in get-dependencies.sh
-# They are typically located in /usr/share/waydroid-extra/images/
-# but might also be in /var/lib/waydroid/images/ depending on the package.
-if [ -d "/usr/share/waydroid-extra/images" ]; then
-    cp -r /usr/share/waydroid-extra/images/*.img "$IMAGE_DIR/"
-elif [ -d "/var/lib/waydroid/images" ]; then
-    cp -r /var/lib/waydroid/images/*.img "$IMAGE_DIR/"
+# Determine variant based on DEVEL_RELEASE
+if [ "${DEVEL_RELEASE:-0}" = "1" ]; then
+    SYSTEM_VARIANT="gapps"   # Nightly → GApps
 else
-    echo "ERROR: Could not find installed Android images." >&2
+    SYSTEM_VARIANT="vanilla" # Stable → Vanilla
+fi
+# Vendor always mainline
+VENDOR_VARIANT="mainline"
+
+# Map architecture names for the script (x86_64 → x86_64, aarch64 → arm64? Check)
+# The script expects architecture names like "x86_64" or "arm64"
+# According to Waydroid, for ARM64 they use "arm64", but the script might accept "aarch64"
+# We'll pass the exact ARCH we have (x86_64 or aarch64) – it should work
+echo "Downloading Android images (${SYSTEM_VARIANT}) for ${ARCH}..."
+if /usr/lib/waydroid/tools/helpers/images.sh download \
+    -o "$IMAGE_DIR" \
+    -s "$SYSTEM_VARIANT" \
+    -v "$VENDOR_VARIANT" \
+    -a "$ARCH"; then
+    echo "Images downloaded successfully."
+else
+    echo "ERROR: Failed to download images using official script." >&2
     exit 1
 fi
 
 # Verify that the images are present
 if [ ! -f "$IMAGE_DIR/system.img" ] || [ ! -f "$IMAGE_DIR/vendor.img" ]; then
-    echo "ERROR: system.img or vendor.img not found in $IMAGE_DIR" >&2
+    echo "ERROR: system.img or vendor.img not found in $IMAGE_DIR after download." >&2
     exit 1
 fi
-
-echo "Android images successfully bundled."
 
 # -------------------------------------------------------------------
 # Deploy dependencies (unchanged)
