@@ -6,14 +6,21 @@ ARCH=$(uname -m)
 
 echo "Installing package dependencies..."
 echo "---------------------------------------------------------------"
-# jq is needed for reliable JSON parsing (API method)
 pacman -Syu --noconfirm waydroid python-pyclip curl unzip jq
+
+# Install the appropriate image package
+if [ "${DEVEL_RELEASE:-0}" = "1" ]; then
+    echo "Installing GApps images (nightly build)..."
+    pacman -S --noconfirm waydroid-image-gapps || pacman -S --noconfirm waydroid-image
+else
+    echo "Installing vanilla images (stable build)..."
+    pacman -S --noconfirm waydroid-image
+fi
 
 echo "Installing debloated packages..."
 echo "---------------------------------------------------------------"
 get-debloated-pkgs --add-common --prefer-nano
 
-# AUR packages (if needed)
 make-aur-package zenity-rs-bin
 make-aur-package 12to11-git
 
