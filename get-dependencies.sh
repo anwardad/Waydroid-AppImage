@@ -6,13 +6,14 @@ ARCH=$(uname -m)
 
 echo "Installing package dependencies..."
 echo "---------------------------------------------------------------"
-pacman -Syu --noconfirm waydroid python-pyclip curl unzip
+# jq is needed for reliable JSON parsing (API method)
+pacman -Syu --noconfirm waydroid python-pyclip curl unzip jq
 
 echo "Installing debloated packages..."
 echo "---------------------------------------------------------------"
 get-debloated-pkgs --add-common --prefer-nano
 
-# Comment this out if you need an AUR package
+# AUR packages (if needed)
 make-aur-package zenity-rs-bin
 make-aur-package 12to11-git
 
